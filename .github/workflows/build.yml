@@ -28,23 +28,22 @@ jobs:
             libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx \
             libelf-dev autoconf automake libtool autopoint \
             device-tree-compiler ccache ecj fastjar mkisofs wget curl \
-            swig rsync bison libncurses-dev xsltproc file re2c
+            swig rsync bison libncurses-dev xsltproc file re2c \
+            libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev libffi-dev
 
-          # 手动安装 python2.7（兼容 ubuntu-24.04）
-          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
-          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
-          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-stdlib_2.7.18-13ubuntu1.5_amd64.deb
-          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7_2.7.18-13ubuntu1.5_amd64.deb
+          # 源码编译 Python 2.7.18
+          wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
+          tar xzf Python-2.7.18.tgz
+          cd Python-2.7.18
+          ./configure --enable-optimizations --prefix=/usr/local
+          make -j$(nproc)
+          sudo make altinstall
+          cd ..
+          rm -rf Python-2.7.18*
 
-          # 加 ls 检查文件是否存在（debug用）
-          ls -l *.deb
-
-          # 修正：去掉多余的 "lib "，正确写法
-          sudo dpkg -i libpython2.7-minimal_*.deb python2.7-minimal_*.deb
-          sudo dpkg -i libpython2.7-stdlib_*.deb python2.7_*.deb
-
-          # 清理
-          rm -f *.deb
+          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2.7
+          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
+          python2.7 --version
 
       - name: Prepare OpenWrt build environment
         run: |
@@ -55,9 +54,6 @@ jobs:
       - name: Load target config (MT76x8 example)
         run: |
           cp config.mt76x8 .config
-          # 如需其他目标，取消注释下面一行
-          # cp config.mt76x8-i2c-oled .config
-          # cp config.x86_64 .config
           make defconfig
 
       - name: Download dependencies
