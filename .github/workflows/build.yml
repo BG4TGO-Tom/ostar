@@ -1,0 +1,75 @@
+name: Build OSTAR Firmware
+
+on:
+  workflow_dispatch:    # 手动触发
+  push:
+    branches:
+      - ostar-19.07     # 或者你实际想触发的分支
+  schedule:
+    - cron: '0 20 * * *'   # 每天凌晨4点(UTC+8 ≈ 20:00 UTC前一天)
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04   # 19.07 时代用 20.04 比较稳
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 python2.7 unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler ccache ecj fastjar mkisofs wget curl swig rsync
+
+    - name: Prepare build environment
+      run: |
+        # 你的仓库已经是 OpenWrt 源码结构，直接用
+        cp feeds.conf.default feeds.conf
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Load config (MT76x8 example)
+      run: |
+        # 选择你要编译的目标配置，改这里即可
+        cp config.mt76x8 .config
+        # 或者用其他： config.mt76x8-i2c-oled  / config.x86_64 等
+        # make defconfig   # 如果你想重新生成默认配置可以加这行
+
+    - name: Optional - make menuconfig (not needed in CI)
+      run: echo "Skipping menuconfig in CI"
+
+    - name: Download dependencies & build
+      run: |
+        # 先下载，避免 Actions 网络抖动中断
+        make download -j8 || make download -j1 V=s
+        # 开始编译 -j1 比较稳，时间长但不容易崩
+        make -j1 V=s
+
+    - name: Organize & Upload artifacts
+      if: success()
+      run: |
+        mkdir -p bin/upload
+        # MT76x8 常见的输出位置（根据你的 target 调整）
+        find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs" \) -exec cp {} bin/upload/ \;
+        # 如果有 sysupgrade 和 factory 镜像都保留
+        ls -lh bin/upload/
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: ostar-firmware-${{ github.run_number }}
+        path: bin/upload/*
+        retention-days: 7
+
+    # 可选：自动发布到 Releases（需要配置 GITHUB_TOKEN 权限）
+    - name: Release
+      if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: "build-${{ github.run_number }}"
+        name: "Auto Build ${{ github.run_number }}"
+        files: bin/upload/*
+        body: |
+          Auto built OSTAR firmware
+          Config used: mt76x8   # 可改成变量
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
