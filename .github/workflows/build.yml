@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04   # 19.07 时代用 20.04 比较稳
+    runs-on: ubuntu-24.04   # 19.07 时代用 20.04 比较稳
 
     steps:
     - name: Checkout
