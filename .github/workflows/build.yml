@@ -31,7 +31,7 @@ jobs:
             swig rsync bison libncurses-dev xsltproc file re2c \
             libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev libffi-dev
 
-          # 源码编译 Python 2.7.18
+          # 从源码编译 Python 2.7.18（altinstall 方式）
           wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar xzf Python-2.7.18.tgz
           cd Python-2.7.18
@@ -47,13 +47,17 @@ jobs:
 
       - name: Prepare OpenWrt build environment
         run: |
-          cp feeds.conf.default feeds.conf || true
+          # 不执行 cp feeds.conf.default feeds.conf，避免任何 duplicate feed name 风险
+          # OpenWrt 会自动使用 feeds.conf.default（你的仓库没有 feeds.conf 文件）
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Load target config (MT76x8 example)
         run: |
           cp config.mt76x8 .config
+          # 如需其他配置，取消注释：
+          # cp config.mt76x8-i2c-oled .config
+          # cp config.x86_64 .config
           make defconfig
 
       - name: Download dependencies
@@ -79,7 +83,7 @@ jobs:
           path: bin/upload/*
           retention-days: 7
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (manual trigger only)
         if: success() && github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
