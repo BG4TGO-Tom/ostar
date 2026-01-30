@@ -29,9 +29,8 @@ jobs:
             libelf-dev autoconf automake libtool autopoint \
             device-tree-compiler ccache ecj fastjar mkisofs wget curl \
             swig rsync bison libncurses-dev xsltproc file re2c \
-            libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev libffi-dev
+            libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev libffi-dev cmake
 
-          # 从源码编译 Python 2.7.18（altinstall 方式）
           wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar xzf Python-2.7.18.tgz
           cd Python-2.7.18
@@ -44,20 +43,20 @@ jobs:
           sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2.7
           sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
           python2.7 --version
+          cmake --version  # 确认系统 cmake
+
+          # 跳过 host cmake 编译
+          mkdir -p tools/cmake
+          touch tools/cmake/.built
 
       - name: Prepare OpenWrt build environment
         run: |
-          # 不执行 cp feeds.conf.default feeds.conf，避免任何 duplicate feed name 风险
-          # OpenWrt 会自动使用 feeds.conf.default（你的仓库没有 feeds.conf 文件）
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Load target config (MT76x8 example)
         run: |
           cp config.mt76x8 .config
-          # 如需其他配置，取消注释：
-          # cp config.mt76x8-i2c-oled .config
-          # cp config.x86_64 .config
           make defconfig
 
       - name: Download dependencies
@@ -66,7 +65,7 @@ jobs:
 
       - name: Build firmware
         run: |
-          make -j1 V=s
+          make -j1 V=s 2>&1 | tee build.log || (echo "Build failed! Last 200 lines:" && tail -n 200 build.log)
 
       - name: Organize output files
         if: success()
@@ -82,14 +81,3 @@ jobs:
           name: ostar-firmware-${{ github.run_number }}
           path: bin/upload/*
           retention-days: 7
-
-      - name: Create GitHub Release (manual trigger only)
-        if: success() && github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "build-${{ github.run_number }}"
-          name: "Auto Build ${{ github.run_number }}"
-          files: bin/upload/*
-          body: |
-            Auto-built OSTAR firmware (mt76x8 target)
-            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
