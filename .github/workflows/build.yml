@@ -35,8 +35,15 @@ jobs:
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-stdlib_2.7.18-13ubuntu1.5_amd64.deb
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7_2.7.18-13ubuntu1.5_amd64.deb
-          sudo dpkg -i lib python2.7-minimal_*.deb python2.7-minimal_*.deb
+
+          # 加 ls 检查文件是否存在（debug用）
+          ls -l *.deb
+
+          # 修正：去掉多余的 "lib "，正确写法
+          sudo dpkg -i libpython2.7-minimal_*.deb python2.7-minimal_*.deb
           sudo dpkg -i libpython2.7-stdlib_*.deb python2.7_*.deb
+
+          # 清理
           rm -f *.deb
 
       - name: Prepare OpenWrt build environment
