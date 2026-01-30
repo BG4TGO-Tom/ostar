@@ -1,91 +1,87 @@
 name: Build OSTAR Firmware
 
 on:
-  workflow_dispatch:    # 手动触发
+  workflow_dispatch:
   push:
     branches:
-      - ostar-19.07     # 根据你的实际分支调整
+      - ostar-19.07
   schedule:
-    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间次日凌晨4点）
+    - cron: '0 20 * * *'
 
 jobs:
   build:
-    runs-on: ubuntu-24.04   # 已更新为支持的最新版本（原 ubuntu-20.04 已彻底移除）
+    runs-on: ubuntu-24.04
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends \
-          build-essential asciidoc binutils bzip2 gawk gettext git \
-          libncurses5-dev libz-dev patch python3 python3-pip python3-pyelftools \
-          python3-setuptools python-is-python3 unzip zlib1g-dev lib32gcc-s1 \
-          libc6-dev-i386 subversion flex uglifyjs gcc-multilib g++-multilib \
-          p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto \
-          qemu-utils upx libelf-dev autoconf automake libtool autopoint \
-          device-tree-compiler ccache ecj fastjar mkisofs wget curl swig rsync \
-          bison libncurses-dev xsltproc file re2c
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential asciidoc binutils bzip2 gawk gettext git \
+            libncurses5-dev libz-dev patch python3 python3-pip \
+            python3-pyelftools python3-setuptools python-is-python3 \
+            unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion flex \
+            uglifyjs gcc-multilib g++-multilib p7zip p7zip-full msmtp \
+            libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx \
+            libelf-dev autoconf automake libtool autopoint \
+            device-tree-compiler ccache ecj fastjar mkisofs wget curl \
+            swig rsync bison libncurses-dev xsltproc file re2c
 
-        # 手动安装 python2.7（从 Ubuntu 22.04 security 仓库，兼容 24.04）
-        wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
-        wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
-        wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-stdlib_2.7.18-13ubuntu1.5_amd64.deb
-        wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7_2.7.18-13ubuntu1.5_amd64.deb
-        sudo dpkg -i libpython2.7-minimal_*.deb python2.7-minimal_*.deb
-        sudo dpkg -i libpython2.7-stdlib_*.deb python2.7_*.deb
-        rm -f *.deb
+          # 手动安装 python2.7（从 Ubuntu 22.04 security 仓库，兼容 24.04）
+          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
+          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
+          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-stdlib_2.7.18-13ubuntu1.5_amd64.deb
+          wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7_2.7.18-13ubuntu1.5_amd64.deb
+          sudo dpkg -i libpython2.7-minimal_*.deb python2.7-minimal_*.deb
+          sudo dpkg -i libpython2.7-stdlib_*.deb python2.7_*.deb
+          rm -f *.deb
 
-    - name: Prepare OpenWrt build environment
-      run: |
-        # 你的仓库已经是 OpenWrt 源码结构
-        cp feeds.conf.default feeds.conf || true  # 如果已有 feeds.conf 则跳过
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+      - name: Prepare OpenWrt build environment
+        run: |
+          cp feeds.conf.default feeds.conf || true
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-    - name: Load target config (example: MT76x8)
-      run: |
-        # 根据需要选择配置（可改成其他）
-        cp config.mt76x8 .config
-        # 备选： cp config.mt76x8-i2c-oled .config
-        #       cp config.x86_64 .config
-        make defconfig
+      - name: Load target config (example: MT76x8)
+        run: |
+          cp config.mt76x8 .config
+          # Alternative: cp config.mt76x8-i2c-oled .config
+          #              cp config.x86_64 .config
+          make defconfig
 
-    - name: Download all dependencies first
-      run: |
-        make download -j8 || make download -j1 V=s
+      - name: Download all dependencies first
+        run: |
+          make download -j8 || make download -j1 V=s
 
-    - name: Build firmware
-      run: |
-        # -j1 最稳（避免 OOM），如机器内存够可改 -j$(nproc)
-        make -j1 V=s
+      - name: Build firmware
+        run: |
+          make -j1 V=s
 
-    - name: Organize output files
-      if: success()
-      run: |
-        mkdir -p bin/upload
-        # 常见输出路径（根据 target 调整，如果 x86_64 则路径不同）
-        find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs-sysupgrade.bin" -o -name "*factory*" \) -exec cp {} bin/upload/ \;
-        ls -lh bin/upload/
+      - name: Organize output files
+        if: success()
+        run: |
+          mkdir -p bin/upload
+          find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs-sysupgrade.bin" -o -name "*factory*" \) -exec cp {} bin/upload/ \;
+          ls -lh bin/upload/
 
-    - name: Upload artifacts
-      if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ostar-firmware-${{ github.run_number }}
-        path: bin/upload/*
-        retention-days: 7
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ostar-firmware-${{ github.run_number }}
+          path: bin/upload/*
+          retention-days: 7
 
-    # 可选：推送到 Releases（需仓库有 write permission）
-    - name: Create GitHub Release (on manual trigger)
-      if: success() && github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: "build-${{ github.run_number }}"
-        name: "Auto Build ${{ github.run_number }}"
-        files: bin/upload/*
-        body: |
-          Auto-built OSTAR firmware (mt76x8 target)
-          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Create GitHub Release (on manual trigger)
+        if: success() && github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "build-${{ github.run_number }}"
+          name: "Auto Build ${{ github.run_number }}"
+          files: bin/upload/*
+          body: |
+            Auto-built OSTAR firmware (mt76x8 target)
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
