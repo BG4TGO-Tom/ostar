@@ -30,12 +30,12 @@ jobs:
             device-tree-compiler ccache ecj fastjar mkisofs wget curl \
             swig rsync bison libncurses-dev xsltproc file re2c
 
-          # 手动安装 python2.7（从 Ubuntu 22.04 security 仓库，兼容 24.04）
+          # 手动安装 python2.7（兼容 ubuntu-24.04）
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7-minimal_2.7.18-13ubuntu1.5_amd64.deb
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/libpython2.7-stdlib_2.7.18-13ubuntu1.5_amd64.deb
           wget -q http://security.ubuntu.com/ubuntu/pool/universe/p/python2.7/python2.7_2.7.18-13ubuntu1.5_amd64.deb
-          sudo dpkg -i libpython2.7-minimal_*.deb python2.7-minimal_*.deb
+          sudo dpkg -i lib python2.7-minimal_*.deb python2.7-minimal_*.deb
           sudo dpkg -i libpython2.7-stdlib_*.deb python2.7_*.deb
           rm -f *.deb
 
@@ -45,14 +45,15 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Load target config (example: MT76x8)
+      - name: Load target config (MT76x8 example)
         run: |
           cp config.mt76x8 .config
-          # Alternative: cp config.mt76x8-i2c-oled .config
-          #              cp config.x86_64 .config
+          # 如需其他目标，取消注释下面一行
+          # cp config.mt76x8-i2c-oled .config
+          # cp config.x86_64 .config
           make defconfig
 
-      - name: Download all dependencies first
+      - name: Download dependencies
         run: |
           make download -j8 || make download -j1 V=s
 
@@ -75,7 +76,7 @@ jobs:
           path: bin/upload/*
           retention-days: 7
 
-      - name: Create GitHub Release (on manual trigger)
+      - name: Create GitHub Release
         if: success() && github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
