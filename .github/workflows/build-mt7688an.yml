@@ -1,0 +1,72 @@
+name: Build OSTAR MT7688AN
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout ostar source
+      uses: actions/checkout@v3
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          gcc \
+          g++ \
+          binutils \
+          bzip2 \
+          flex \
+          python3 \
+          perl \
+          make \
+          findutils \
+          grep \
+          diffutils \
+          unzip \
+          gawk \
+          getopt \
+          subversion \
+          libz-dev \
+          libc6-dev \
+          git \
+          rsync \
+          file \
+          wget
+
+    - name: Update and install feeds
+      run: |
+        cp feeds.conf.default feeds.conf
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Load MT7688AN config
+      run: |
+        cp config.mt76x8 .config
+        make defconfig
+
+    - name: Download sources
+      run: |
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile firmware
+      run: |
+        echo "Start compiling with $(nproc) threads"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+
+    - name: Upload MT7688AN firmware
+      uses: actions/upload-artifact@v3
+      with:
+        name: ostar-mt7688an-firmware
+        path: bin/targets/ramips/mt76x8/
