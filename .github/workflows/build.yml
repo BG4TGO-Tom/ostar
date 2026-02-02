@@ -33,7 +33,18 @@ jobs:
             gcc-multilib g++-multilib libc6-dev-i386 lib32gcc-s1 \
             texinfo xmlto qemu-utils upx p7zip p7zip-full msmtp uglifyjs
 
-          # 编译安装 Python 2.7（OpenWrt 19.07 必须）
+          # 确认系统 cmake 可用（Ubuntu 24.04 自带 3.28+，可替代 host cmake）
+          cmake --version
+
+          # 关键修复：跳过 host cmake 源码编译（避免 cmWorkerPool.cxx 在 GCC 13+ 报错）
+          mkdir -p tools/cmake
+          touch tools/cmake/.built
+
+          # 额外创建 stamp 文件（匹配你的日志中的长 stamp 名，避免 make 反复尝试编译）
+          mkdir -p staging_dir/host/stamp
+          touch staging_dir/host/stamp/.tools_compile_yynyynnyyynyyyyynyynnyyyynyyyyyyyyyyyyyyynyynynnyyynnyyy
+
+          # 继续安装 Python 2.7（OpenWrt 19.07 必须）
           wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar xzf Python-2.7.18.tgz
           cd Python-2.7.18
@@ -65,7 +76,7 @@ jobs:
           echo "开始编译..."
           make -j$(nproc) V=s 2>&1 | tee build.log || {
             echo "多核编译失败，正在尝试单线程重试..."
-            make -j1 V=s 2>&1 | tee -a build.log || true  # 不立即 exit，让后续能检查
+            make -j1 V=s 2>&1 | tee -a build.log || true
           }
 
           echo "=== 编译后目录检查 ==="
