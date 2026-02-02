@@ -5,13 +5,11 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt.git
-  REPO_BRANCH: openwrt-23.05      # 可改为 snapshot、openwrt-22.03 等
-  FEEDS_CONF: feeds.conf.default
-  DIY_PART1: diy-part1.sh
+  REPO_BRANCH: openwrt-23.05
 
 jobs:
   build:
@@ -20,32 +18,29 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
 
       - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y \
-            build-essential ccache ecj fastjar file g++ gawk \
+          sudo apt install -y build-essential ccache ecj fastjar file g++ gawk \
             gettext git java-propose-classpath libelf-dev libncurses5-dev \
-            libncursesw5-dev libssl-dev python3 python3-pip rsync \
-            subversion swig time unzip wget xmlto zlib1g-dev \
-            clang flex bison gperf python3-distutils
+            libncursesw5-dev libssl-dev python3 python3-pip rsync subversion \
+            swig time unzip wget xmlto zlib1g-dev clang flex bison gperf \
+            python3-distutils
 
       - name: Clone OpenWrt Source
         run: |
           git clone --depth=1 -b $REPO_BRANCH $REPO_URL openwrt
           cd openwrt
-          echo "OpenWrt source cloned."
+          echo "✅ OpenWrt source cloned."
 
-      - name: Run DIY Script Part 1
+      - name: Run DIY Part 1 (for feeds.conf.default)
         run: |
-          if [ -f "$DIY_PART1" ]; then
-            chmod +x "$DIY_PART1"
-            ./"$DIY_PART1"
+          if [ -f diy-part1.sh ]; then
+            chmod +x diy-part1.sh
+            ./diy-part1.sh
           else
-            echo "⚠️ $DIY_PART1 not found, skipping..."
+            echo "⚠️ diy-part1.sh not found, skipping..."
           fi
 
       - name: Update and Install Feeds
@@ -54,35 +49,27 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Run DIY Script Part 2 (Optional)
+      - name: Copy .config from repo root
         run: |
-          if [ -f "$DIY_PART2" ]; then
-            chmod +x "$DIY_PART2"
-            ./"$DIY_PART2"
-          else
-            echo "⚠️ $DIY_PART2 not found, skipping..."
-          fi
-
-      - name: Verify .config Exists
-        run: |
-          cd openwrt
-          if [ ! -f ".config" ]; then
-            echo "❌ Error: .config not found! Please generate it in diy-part2.sh or provide defconfig."
+          if [ ! -f config.seed ]; then
+            echo "❌ Error: config.seed not found in repository root!"
+            echo "Please commit your OpenWrt .config as 'config.seed'."
             exit 1
           fi
+          cp config.seed openwrt/.config
+          echo "✅ .config copied from config.seed"
 
       - name: Start Compilation
         run: |
           cd openwrt
+          make defconfig  # 可选：验证并补全配置
           make download -j8
-          echo "✅ Starting build..."
           make -j$(nproc)
 
       - name: Prepare Artifacts
         run: |
           mkdir -p artifacts
           find openwrt/bin/targets -type f \( -iname "*.bin" -o -iname "*.img.gz" -o -iname "*.tar.gz" \) -exec cp {} artifacts/ \;
-          echo "Firmware files copied to artifacts/"
 
       - name: Upload Firmware
         uses: actions/upload-artifact@v4
