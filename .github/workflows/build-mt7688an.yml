@@ -12,7 +12,6 @@ env:
   REPO_BRANCH: openwrt-23.05      # 可改为 snapshot、openwrt-22.03 等
   FEEDS_CONF: feeds.conf.default
   DIY_PART1: diy-part1.sh
-  DIY_PART2: diy-part2.sh
 
 jobs:
   build:
