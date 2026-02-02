@@ -1,11 +1,10 @@
-name: Build OpenWrt 19.07 - ostar
+name: Build OpenWrt 19.07 - ostar (MT7688AN)
 
 on:
-  repository_dispatch:
   workflow_dispatch:
     inputs:
       ssh:
-        description: '开启 SSH 连接到 Actions 进行调试？'
+        description: '开启 SSH 调试？'
         required: false
         default: 'false'
 
@@ -23,37 +22,31 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04  # ✅ 关键：Ubuntu 20.04 已废弃，必须用 22.04
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
     - name: 初始化编译环境
-      env:
-        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo apt-get -qq update
-        sudo apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
-        sudo apt-get -qq autoremove --purge
-        sudo apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+        sudo apt update
+        sudo apt install -y \
+            build-essential ccache ecj fastjar file g++ gawk \
+            gettext git libncurses5-dev libssl-dev python3-distutils \
+            rsync unzip wget xz-utils zlib1g-dev libelf-dev \
+            libarchive-dev libcurl4-openssl-dev libexpat1-dev
 
-    - name: 克隆你的 ostar 仓库
-      working-directory: /workdir
+    - name: 克隆 ostar 仓库
       run: |
-        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt --depth=1
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    # =============== 新增：打 CMake 兼容性补丁 ===============
-    - name: 为 CMake 3.15.1 打 GCC 12+ 兼容补丁（修复 cmWorkerPool 编译错误）
+    # =============== ✅ 核心修复：为 CMake 3.15.1 打 GCC 11+ 兼容补丁 ===============
+    - name: Apply CMake 3.15.1 compatibility patch for Ubuntu 22.04
       run: |
         mkdir -p openwrt/tools/cmake/patches
-        cat > openwrt/tools/cmake/patches/100-gcc12-compat.patch << 'EOF'
+        cat > openwrt/tools/cmake/patches/100-gcc11-compat.patch << 'EOF'
 --- a/Source/cmWorkerPool.h
 +++ b/Source/cmWorkerPool.h
 @@ -18,7 +18,11 @@
@@ -62,11 +55,7 @@ jobs:
  
 -using std::result_of;
 +#if __cplusplus >= 201703L
-+#  if defined(__GNUC__) && (__GNUC__ > 11 || (__GNUC__ == 11 && __GNUC_MINOR__ >= 1))
 +using std::invoke_result_t;
-+#  else
-+using std::result_of;
-+#  endif
 +#else
 +using std::result_of;
 +#endif
@@ -79,7 +68,7 @@ jobs:
  #include "cmWorkerPool.h"
  #include "cmsys/ThreadPool.hxx"
  
-+#if __cplusplus >= 201703L && defined(__GNUC__) && (__GNUC__ > 11 || (__GNUC__ == 11 && __GNUC_MINOR__ >= 1))
++#if __cplusplus >= 201703L
 +using std::invoke_result_t;
 +#else
  using std::result_of;
@@ -88,53 +77,39 @@ jobs:
  void cmWorkerPool::Initialize(unsigned int threadCount)
 EOF
 
-    - name: 执行 diy-part1（自定义 feeds/patch）
+    - name: 执行 diy-part1（自定义 feeds）
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH || true
+        [ -e "$FEEDS_CONF" ] && cp "$FEEDS_CONF" openwrt/feeds.conf.default
+        chmod +x "$DIY_P1_SH" || true
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH || echo "diy-part1 可选，执行失败继续..."
+        ../"$DIY_P1_SH" || echo "diy-part1 skipped or failed"
 
-    - name: Update and install feeds
+    - name: 更新并安装 feeds
       run: |
         cd openwrt
-        
-        if [ -e ../$FEEDS_CONF ]; then
-          cp ../$FEEDS_CONF feeds.conf
-        else
-          cp feeds.conf.default feeds.conf
-        fi
-        
+        [ -e "../$FEEDS_CONF" ] && cp "../$FEEDS_CONF" feeds.conf
         ./scripts/feeds update -a
-        
-        ./scripts/feeds install luci-base
-        ./scripts/feeds install luci-lib-base
-        ./scripts/feeds install luci-compat
-        ./scripts/feeds install luci-mod-status
-        ./scripts/feeds install luci-mod-system
-        ./scripts/feeds install luci-proto-ipv6
-        ./scripts/feeds install stm32flash
-        ./scripts/feeds install -a -pmmdvm
-        ./scripts/feeds install travelmate
-        ./scripts/feeds install luci-app-travelmate
-        ./scripts/feeds install luci-i18n-travelmate-zh-cn
+        ./scripts/feeds install luci-base luci-lib-base luci-compat \
+            luci-mod-status luci-mod-system luci-proto-ipv6 stm32flash travelmate \
+            luci-app-travelmate luci-i18n-travelmate-zh-cn
+        ./scripts/feeds install -a -p mmdvm
 
-    - name: 加载 .config 并执行 diy-part2
+    - name: 加载配置并执行 diy-part2
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH || true
+        [ -e files ] && cp -r files openwrt/
+        [ -e "$CONFIG_FILE" ] && cp "$CONFIG_FILE" openwrt/.config
+        chmod +x "$DIY_P2_SH" || true
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH || echo "diy-part2 可选，执行失败继续..."
+        ../"$DIY_P2_SH" || echo "diy-part2 skipped or failed"
 
     - name: SSH 调试（可选）
       uses: P3TERX/ssh2actions@v1.0.0
-      if: (github.event.inputs.ssh == 'true' || contains(github.event.action, 'ssh'))
+      if: github.event.inputs.ssh == 'true'
       env:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-    - name: 下载依赖包
+    - name: 下载依赖
       run: |
         cd openwrt
         make defconfig
@@ -146,24 +121,19 @@ EOF
       run: |
         cd openwrt
         make target/linux/clean || true
-        
-        # 先尝试多线程，失败则回退到单线程（host 工具编译易 OOM）
-        echo "使用 $(nproc) 线程编译（若失败将回退到 -j1）"
-        make -j$(nproc) V=s || make -j1 V=s || make -j1 V=s IGNORE_ERRORS="n m"
-        
-        if ls bin/targets/*/*/*-squashfs-sysupgrade.bin 1> /dev/null 2>&1; then
+
+        # 尝试多线程 → 失败则单线程（防 host 工具 OOM）
+        make -j$(nproc) V=s || make -j1 V=s || make -j1 IGNORE_ERRORS="n m" V=s
+
+        if ls bin/targets/*/*/*-squashfs-sysupgrade.bin >/dev/null 2>&1; then
           echo "status=success" >> $GITHUB_OUTPUT
           grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_custom" >> $GITHUB_ENV
+          echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         else
-          echo "编译失败：未生成 bin/targets/。请检查日志中 cmake 或其他错误。"
+          echo "❌ 编译失败：未生成固件！"
           exit 1
         fi
-
-    - name: 查看磁盘使用情况
-      if: always()
-      run: df -hT
 
     - name: 上传 bin 目录
       uses: actions/upload-artifact@v4
@@ -173,7 +143,7 @@ EOF
         path: openwrt/bin
         retention-days: 7
 
-    - name: 整理并上传固件
+    - name: 上传固件
       uses: actions/upload-artifact@v4
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       with:
@@ -181,15 +151,13 @@ EOF
         path: openwrt/bin/targets/**/*
         retention-days: 14
 
-    - name: 发布到 GitHub Releases
+    - name: 发布到 Releases
       uses: softprops/action-gh-release@v2
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       with:
         tag_name: "19.07-${{ env.FILE_DATE }}"
         name: OpenWrt 19.07 ${{ env.FILE_DATE }}
-        files: openwrt/bin/targets/**/*-squashfs-*
-        body: |
-          自动构建固件（基于 ostar 仓库 openwrt-19.07 分支）
-          构建时间：${{ env.FILE_DATE }}
+        files: openwrt/bin/targets/**/*-squashfs-sysupgrade.bin
+        body: "Auto build from ostar/openwrt-19.07 @ ${{ github.sha }}"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
