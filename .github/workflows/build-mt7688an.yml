@@ -49,6 +49,45 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt --depth=1
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    # =============== 新增：打 CMake 兼容性补丁 ===============
+    - name: 为 CMake 3.15.1 打 GCC 12+ 兼容补丁（修复 cmWorkerPool 编译错误）
+      run: |
+        mkdir -p openwrt/tools/cmake/patches
+        cat > openwrt/tools/cmake/patches/100-gcc12-compat.patch << 'EOF'
+--- a/Source/cmWorkerPool.h
++++ b/Source/cmWorkerPool.h
+@@ -18,7 +18,11 @@
+ #include <future>
+ #include <vector>
+ 
+-using std::result_of;
++#if __cplusplus >= 201703L
++#  if defined(__GNUC__) && (__GNUC__ > 11 || (__GNUC__ == 11 && __GNUC_MINOR__ >= 1))
++using std::invoke_result_t;
++#  else
++using std::result_of;
++#  endif
++#else
++using std::result_of;
++#endif
+ 
+ namespace cmsys {
+ class ThreadPool;
+--- a/Source/cmWorkerPool.cxx
++++ b/Source/cmWorkerPool.cxx
+@@ -15,6 +15,10 @@
+ #include "cmWorkerPool.h"
+ #include "cmsys/ThreadPool.hxx"
+ 
++#if __cplusplus >= 201703L && defined(__GNUC__) && (__GNUC__ > 11 || (__GNUC__ == 11 && __GNUC_MINOR__ >= 1))
++using std::invoke_result_t;
++#else
+ using std::result_of;
++#endif
+ 
+ void cmWorkerPool::Initialize(unsigned int threadCount)
+EOF
+
     - name: 执行 diy-part1（自定义 feeds/patch）
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
@@ -56,24 +95,18 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH || echo "diy-part1 可选，执行失败继续..."
 
-    - name: Update and install feeds（整合你刚刚贴的 feeds 命令）
+    - name: Update and install feeds
       run: |
         cd openwrt
         
-        # 1. 复制 feeds.conf.default（如果仓库里有 feeds.conf 优先用它）
         if [ -e ../$FEEDS_CONF ]; then
           cp ../$FEEDS_CONF feeds.conf
         else
           cp feeds.conf.default feeds.conf
         fi
         
-        # （可选）换国内镜像加速（19.07 时代很必要）
-        # sed -i 's/downloads.openwrt.org/mirrors.tuna.tsinghua.edu.cn\/openwrt/g' feeds.conf
-        
-        # 2. 更新所有 feeds
         ./scripts/feeds update -a
         
-        # 3. 按需安装包（你贴的完整列表）
         ./scripts/feeds install luci-base
         ./scripts/feeds install luci-lib-base
         ./scripts/feeds install luci-compat
@@ -81,11 +114,7 @@ jobs:
         ./scripts/feeds install luci-mod-system
         ./scripts/feeds install luci-proto-ipv6
         ./scripts/feeds install stm32flash
-        
-        # MMDVM 相关（全装 feed 里的包）
         ./scripts/feeds install -a -pmmdvm
-        
-        # MT76x8 可选：travelmate 系列
         ./scripts/feeds install travelmate
         ./scripts/feeds install luci-app-travelmate
         ./scripts/feeds install luci-i18n-travelmate-zh-cn
@@ -118,7 +147,8 @@ jobs:
         cd openwrt
         make target/linux/clean || true
         
-        echo "使用 $(nproc) 线程编译"
+        # 先尝试多线程，失败则回退到单线程（host 工具编译易 OOM）
+        echo "使用 $(nproc) 线程编译（若失败将回退到 -j1）"
         make -j$(nproc) V=s || make -j1 V=s || make -j1 V=s IGNORE_ERRORS="n m"
         
         if ls bin/targets/*/*/*-squashfs-sysupgrade.bin 1> /dev/null 2>&1; then
@@ -127,7 +157,7 @@ jobs:
           [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=_custom" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         else
-          echo "编译失败：未找到 sysupgrade.bin"
+          echo "编译失败：未生成 bin/targets/。请检查日志中 cmake 或其他错误。"
           exit 1
         fi
 
