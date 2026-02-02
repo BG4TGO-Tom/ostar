@@ -1,4 +1,4 @@
-name: Build ostar (MT7688AN) - MMDVM + Travelmate
+name: Build ostar (MT7688AN) - Using config.mt76x8
 
 on:
   workflow_dispatch:
@@ -23,18 +23,21 @@ jobs:
             rsync unzip wget xz-utils zlib1g-dev libelf-dev \
             libarchive-dev libcurl4-openssl-dev libexpat1-dev
 
-    - name: 克隆 ostar 仓库（含 .config）
+    - name: 克隆 ostar 仓库
       run: |
         git clone --depth=1 --branch "$REPO_BRANCH" "$REPO_URL" openwrt
         cd openwrt
-        if [ ! -f .config ]; then
-          echo "❌ 错误：仓库中缺少 .config！"
-          exit 1
-        fi
-        echo "✅ 已加载 .config"
+        ls -l config.mt76x8 || { echo "❌ 错误：缺少 config.mt76x8！"; exit 1; }
 
-    # =============== 关键修复：CMake 3.15.1 兼容 GCC 11+ ===============
-    - name: Apply CMake compatibility patch
+    # =============== 关键：使用 config.mt76x8 作为 .config ===============
+    - name: 加载 MT7688 配置
+      run: |
+        cd openwrt
+        cp config.mt76x8 .config
+        echo "✅ 已加载 config.mt76x8"
+
+    # =============== CMake 补丁（Ubuntu 22.04 必需） ===============
+    - name: Apply CMake 3.15.1 compatibility patch
       run: |
         mkdir -p openwrt/tools/cmake/patches
         cat > openwrt/tools/cmake/patches/100-gcc11-compat.patch << 'EOF'
@@ -68,8 +71,8 @@ jobs:
  void cmWorkerPool::Initialize(unsigned int threadCount)
 EOF
 
-    # =============== 按你的要求配置 feeds ===============
-    - name: 配置自定义 feeds 源
+    # =============== 配置 feeds（按你提供） ===============
+    - name: 配置 feeds 源
       run: |
         cd openwrt
         cat > feeds.conf << 'EOF'
@@ -81,8 +84,7 @@ EOF
         ./scripts/feeds clean
         ./scripts/feeds update -a
 
-    # =============== 精确安装你指定的包 ===============
-    - name: 安装必要软件包
+    - name: 安装指定软件包
       run: |
         cd openwrt
         ./scripts/feeds install luci-base
@@ -104,28 +106,27 @@ EOF
         make download -j8
         find dl -size -1024c -delete
 
-    - name: 编译固件（真实构建）
+    - name: 编译固件（这次是真的！）
       id: compile
       run: |
         cd openwrt
-        echo "⏳ 开始编译（预计 30～60 分钟）..."
+        echo "⏳ 开始编译 MT7688 固件（预计 30～60 分钟）..."
         make -j$(nproc) V=s
 
-        # 检查是否生成 sysupgrade 固件
-        if ! ls bin/targets/*/*/*-squashfs-sysupgrade.bin >/dev/null 2>&1; then
-          echo "❌ 编译完成但未生成固件！"
-          ls -R bin/ || echo "bin 目录为空"
+        # 检查是否生成固件
+        if ! ls bin/targets/ramips/mt76x8/*-squashfs-sysupgrade.bin >/dev/null 2>&1; then
+          echo "❌ 编译完成但未生成 MT7688 固件！"
+          echo "检查 bin 目录内容："
+          ls -R bin/
           exit 1
         fi
 
-        DEVICE=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | head -1 | sed -r 's/.*DEVICE_(.*)=y/\1/' || echo "mt7688")
-        echo "DEVICE_NAME=_${DEVICE}" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "✅ 固件已生成！"
 
-    - name: 上传固件到 Artifacts
+    - name: 上传固件
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: ostar-mmdvm-travelmate${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin/targets/**/*
+        name: ostar-mt7688-firmware-$(date +%Y%m%d)
+        path: openwrt/bin/targets/ramips/mt76x8/
         retention-days: 14
