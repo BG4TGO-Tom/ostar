@@ -1,7 +1,7 @@
 name: 编译 OSTAR 固件
 
 on:
-  workflow_dispatch:          # 手动触发
+  workflow_dispatch:
   push:
     branches:
       - ostar-19.07
@@ -16,26 +16,24 @@ jobs:
       - name: 检出代码仓库
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # 如果后续需要 git describe 等，建议打开
+          fetch-depth: 0
 
       - name: 安装系统依赖 + Python 2.7
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             build-essential asciidoc binutils bzip2 gawk gettext git \
-            libncurses5-dev libz-dev patch python3 python3-pip \
-            python3-pyelftools python3-setuptools python-is-python3 \
-            unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 subversion flex \
-            uglifyjs gcc-multilib g++-multilib p7zip p7zip-full msmtp \
-            libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx \
-            libelf-dev autoconf automake libtool autopoint \
-            device-tree-compiler ccache ecj fastjar mkisofs wget curl \
-            swig rsync bison libncurses-dev xsltproc file re2c \
-            libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev \
-            libffi-dev cmake libncursesw5-dev libgdbm-compat-dev \
-            libdb-dev uuid-dev liblzma-dev libmpdec-dev
+            subversion patch unzip zlib1g-dev libncurses5-dev \
+            flex bison libssl-dev python3 python3-setuptools python3-pip \
+            python3-pyelftools python-is-python3 libelf-dev autoconf \
+            automake libtool autopoint device-tree-compiler ccache \
+            ecj fastjar mkisofs wget curl rsync xsltproc file re2c \
+            libreadline-dev libsqlite3-dev libgdbm-dev tk-dev libffi-dev \
+            cmake libncursesw5-dev libglib2.0-dev uuid-dev liblzma-dev \
+            gcc-multilib g++-multilib libc6-dev-i386 lib32gcc-s1 \
+            texinfo xmlto qemu-utils upx p7zip p7zip-full msmtp uglifyjs
 
-          # 编译安装 Python 2.7（19.07 必须）
+          # 编译安装 Python 2.7（OpenWrt 19.07 必须使用）
           wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar xzf Python-2.7.18.tgz
           cd Python-2.7.18
@@ -64,7 +62,7 @@ jobs:
 
       - name: 编译固件
         run: |
-          # 先尝试多核编译，失败则回退单线程
+          # 先尝试多核，失败则单线程重试
           make -j$(nproc) V=s 2>&1 | tee build.log || {
             echo "多核编译失败，正在尝试单线程重试..."
             make -j1 V=s 2>&1 | tee -a build.log || {
@@ -85,7 +83,7 @@ jobs:
             -o -name "*.img" \
             -o -name "*.bin" \
           \) -exec cp -v {} bin/upload/ \;
-          echo "输出文件列表："
+          echo "输出文件列表（按大小排序）："
           ls -lhS bin/upload/
 
       - name: 上传固件产物
