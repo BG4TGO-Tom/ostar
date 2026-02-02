@@ -1,22 +1,24 @@
-name: Build OSTAR Firmware
+name: 编译 OSTAR 固件
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:          # 手动触发
   push:
     branches:
       - ostar-19.07
   schedule:
-    - cron: '0 20 * * *'
+    - cron: '0 20 * * *'      # 每天 UTC 20:00 自动构建
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repository
+      - name: 检出代码仓库
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 如果后续需要 git describe 等，建议打开
 
-      - name: Install system dependencies
+      - name: 安装系统依赖 + Python 2.7
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -29,55 +31,68 @@ jobs:
             libelf-dev autoconf automake libtool autopoint \
             device-tree-compiler ccache ecj fastjar mkisofs wget curl \
             swig rsync bison libncurses-dev xsltproc file re2c \
-            libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev libffi-dev cmake
+            libreadline-dev libsqlite3-dev libgdbm-dev libbz2-dev tk-dev \
+            libffi-dev cmake libncursesw5-dev libgdbm-compat-dev \
+            libdb-dev uuid-dev liblzma-dev libmpdec-dev
 
+          # 编译安装 Python 2.7（19.07 必须）
           wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar xzf Python-2.7.18.tgz
           cd Python-2.7.18
-          ./configure --enable-optimizations --prefix=/usr/local
+          ./configure --enable-optimizations --prefix=/usr/local/python27
           make -j$(nproc)
           sudo make altinstall
           cd ..
           rm -rf Python-2.7.18*
+          sudo ln -sf /usr/local/python27/bin/python2.7 /usr/bin/python2.7
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
+          python2 --version
 
-          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2.7
-          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
-          python2.7 --version
-          cmake --version  # 确认系统 cmake
-
-          # 跳过 host cmake 编译
-          mkdir -p tools/cmake
-          touch tools/cmake/.built
-
-      - name: Prepare OpenWrt build environment
+      - name: 更新并安装 feeds
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds update -a || { echo "feeds update 失败"; exit 1; }
+          ./scripts/feeds install -a || { echo "feeds install 失败"; exit 1; }
 
-      - name: Load target config (MT76x8 example)
+      - name: 加载目标配置（以 MT76x8 为例）
         run: |
           cp config.mt76x8 .config
           make defconfig
 
-      - name: Download dependencies
+      - name: 下载所有依赖源码
         run: |
           make download -j8 || make download -j1 V=s
 
-      - name: Build firmware
+      - name: 编译固件
         run: |
-          make -j1 V=s 2>&1 | tee build.log || (echo "Build failed! Last 200 lines:" && tail -n 200 build.log)
+          # 先尝试多核编译，失败则回退单线程
+          make -j$(nproc) V=s 2>&1 | tee build.log || {
+            echo "多核编译失败，正在尝试单线程重试..."
+            make -j1 V=s 2>&1 | tee -a build.log || {
+              echo "编译彻底失败！显示最后 300 行日志："
+              tail -n 300 build.log
+              exit 1
+            }
+          }
 
-      - name: Organize output files
+      - name: 收集输出文件
         if: success()
         run: |
           mkdir -p bin/upload
-          find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs-sysupgrade.bin" -o -name "*factory*" \) -exec cp {} bin/upload/ \;
-          ls -lh bin/upload/
+          find bin/targets/ -type f \( \
+            -name "*squashfs-sysupgrade.bin" \
+            -o -name "*squashfs-factory.bin" \
+            -o -name "*factory*.bin" \
+            -o -name "*.img" \
+            -o -name "*.bin" \
+          \) -exec cp -v {} bin/upload/ \;
+          echo "输出文件列表："
+          ls -lhS bin/upload/
 
-      - name: Upload artifacts
+      - name: 上传固件产物
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ostar-firmware-${{ github.run_number }}
           path: bin/upload/*
           retention-days: 7
+          compression-level: 6
