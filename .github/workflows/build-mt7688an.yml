@@ -1,137 +1,93 @@
-#
-# Build Ostar-19.07 on Ubuntu 22.04 (2026 Compatible)
-# Fixes: CMake version, patch compatibility, toolchain issues
-#
-
-name: Build Ostar-19.07
+name: Build OpenWrt Firmware
 
 on:
-  workflow_dispatch:
-    inputs:
-      ssh:
-        description: 'Enable SSH debug (true/false)'
-        required: false
-        default: 'false'
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
 
 env:
-  REPO_URL: https://github.com/BG4TGO-Tom/ostar.git
-  REPO_BRANCH: ostar-19.07
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  REPO_BRANCH: openwrt-23.05      # 可改为 snapshot、openwrt-22.03 等
   FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: true
-  UPLOAD_FIRMWARE: false
-  TZ: Asia/Shanghai
+  DIY_PART1: diy-part1.sh
+  DIY_PART2: diy-part2.sh
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # ✅ 2026 年仍受支持
+    runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
-    - name: Initialize Environment (with CMake 3.13.5)
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo -E apt-get -qq update
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential ccache ecj fastjar file g++ gawk \
+            gettext git java-propose-classpath libelf-dev libncurses5-dev \
+            libncursesw5-dev libssl-dev python3 python3-pip rsync \
+            subversion swig time unzip wget xmlto zlib1g-dev \
+            clang flex bison gperf python3-distutils
 
-        # Install base dependencies (Ubuntu 20.04 compatible set)
-        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
+      - name: Clone OpenWrt Source
+        run: |
+          git clone --depth=1 -b $REPO_BRANCH $REPO_URL openwrt
+          cd openwrt
+          echo "OpenWrt source cloned."
 
-        # 🔧 CRITICAL: Downgrade CMake to 3.13.5 (required by OpenWrt 19.07)
-        echo "Installing CMake 3.13.5..."
-        wget -q https://github.com/Kitware/CMake/releases/download/v3.13.5/cmake-3.13.5-Linux-x86_64.sh
-        sudo chmod +x cmake-3.13.5-Linux-x86_64.sh
-        sudo ./cmake-3.13.5-Linux-x86_64.sh --skip-license --prefix=/usr/local
-        sudo ln -sf /usr/local/bin/cmake /usr/bin/cmake
-        sudo ln -sf /usr/local/bin/ctest /usr/bin/ctest
-        cmake --version
+      - name: Run DIY Script Part 1
+        run: |
+          if [ -f "$DIY_PART1" ]; then
+            chmod +x "$DIY_PART1"
+            ./"$DIY_PART1"
+          else
+            echo "⚠️ $DIY_PART1 not found, skipping..."
+          fi
 
-        # Clean up
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+      - name: Update and Install Feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-    - name: Clone Source Code
-      working-directory: /workdir
-      run: |
-        df -hT $PWD
-        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+      - name: Run DIY Script Part 2 (Optional)
+        run: |
+          if [ -f "$DIY_PART2" ]; then
+            chmod +x "$DIY_PART2"
+            ./"$DIY_PART2"
+          else
+            echo "⚠️ $DIY_PART2 not found, skipping..."
+          fi
 
-    - name: Load Custom Feeds (diy-part1.sh)
-      run: |
-        [ -e "$FEEDS_CONF" ] && mv "$FEEDS_CONF" openwrt/feeds.conf.default
-        chmod +x "$DIY_P1_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P1_SH"
+      - name: Verify .config Exists
+        run: |
+          cd openwrt
+          if [ ! -f ".config" ]; then
+            echo "❌ Error: .config not found! Please generate it in diy-part2.sh or provide defconfig."
+            exit 1
+          fi
 
-    - name: Update Feeds
-      run: cd openwrt && ./scripts/feeds update -a
+      - name: Start Compilation
+        run: |
+          cd openwrt
+          make download -j8
+          echo "✅ Starting build..."
+          make -j$(nproc)
 
-    - name: Install All Feeds
-      run: cd openwrt && ./scripts/feeds install -a
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p artifacts
+          find openwrt/bin/targets -type f \( -iname "*.bin" -o -iname "*.img.gz" -o -iname "*.tar.gz" \) -exec cp {} artifacts/ \;
+          echo "Firmware files copied to artifacts/"
 
-    - name: Install Specific Packages (19.07 compatible)
-      run: |
-        cd openwrt
-        ./scripts/feeds install luci luci-base luci-compat luci-mod-admin-full \
-          luci-proto-ipv6 stm32flash travelmate luci-app-travelmate luci-i18n-travelmate-zh-cn
-
-    - name: Load Custom Configuration + Apply Patches
-      run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e "$CONFIG_FILE" ] && mv "$CONFIG_FILE" openwrt/.config
-        chmod +x "$DIY_P2_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P2_SH"
-
-    - name: SSH Debug (Optional)
-      uses: P3TERX/ssh2actions@v1.0.0
-      if: github.event.inputs.ssh == 'true'
-      env:
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-
-    - name: Download Packages
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -delete
-
-    - name: Compile Firmware
-      id: compile
-      run: |
-        cd openwrt
-        echo "Compiling Ostar-19.07 with $(nproc) threads..."
-        # Use V=s only on final fallback for log clarity
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-    - name: Check Disk Usage
-      if: success() || failure()
-      run: df -hT
-
-    - name: Upload Bin Directory
-      uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: Ostar-19.07_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-        retention-days: 7
-
-    - name: Clean Old Workflow Runs
-      uses: GitRML/delete-workflow-runs@main
-      with:
-        retain_days: 1
-        keep_minimum_runs: 3
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-firmware-${{ github.sha }}
+          path: artifacts/
+          retention-days: 7
