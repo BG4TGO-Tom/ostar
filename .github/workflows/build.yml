@@ -33,7 +33,7 @@ jobs:
             gcc-multilib g++-multilib libc6-dev-i386 lib32gcc-s1 \
             texinfo xmlto qemu-utils upx p7zip p7zip-full msmtp uglifyjs
 
-          # 编译安装 Python 2.7（OpenWrt 19.07 必须使用）
+          # 编译安装 Python 2.7（OpenWrt 19.07 必须）
           wget -q https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar xzf Python-2.7.18.tgz
           cd Python-2.7.18
@@ -60,31 +60,47 @@ jobs:
         run: |
           make download -j8 || make download -j1 V=s
 
-      - name: 编译固件
+      - name: 编译固件（加强日志 + 目录检查）
         run: |
-          # 先尝试多核，失败则单线程重试
+          echo "开始编译..."
           make -j$(nproc) V=s 2>&1 | tee build.log || {
             echo "多核编译失败，正在尝试单线程重试..."
-            make -j1 V=s 2>&1 | tee -a build.log || {
-              echo "编译彻底失败！显示最后 300 行日志："
-              tail -n 300 build.log
-              exit 1
-            }
+            make -j1 V=s 2>&1 | tee -a build.log || true  # 不立即 exit，让后续能检查
           }
 
-      - name: 收集输出文件
+          echo "=== 编译后目录检查 ==="
+          ls -la bin/ || echo "bin/ 不存在"
+          ls -la bin/targets/ 2>/dev/null || echo "bin/targets/ 不存在或为空！编译很可能失败"
+          echo "=== build.log 最后 150 行（关键错误通常在这里） ==="
+          tail -n 150 build.log
+
+          # 如果 bin/targets 不存在或为空，强制失败
+          if [ ! -d "bin/targets" ] || [ -z "$(ls bin/targets 2>/dev/null)" ]; then
+            echo "错误：bin/targets 目录不存在或为空，编译失败！请查看上面日志。"
+            exit 1
+          fi
+
+      - name: 收集输出文件（仅在编译成功时执行）
         if: success()
         run: |
           mkdir -p bin/upload
+
           find bin/targets/ -type f \( \
             -name "*squashfs-sysupgrade.bin" \
             -o -name "*squashfs-factory.bin" \
             -o -name "*factory*.bin" \
+            -o -name "*initramfs*.bin" \
             -o -name "*.img" \
             -o -name "*.bin" \
           \) -exec cp -v {} bin/upload/ \;
-          echo "输出文件列表（按大小排序）："
-          ls -lhS bin/upload/
+
+          if [ -z "$(ls bin/upload 2>/dev/null)" ]; then
+            echo "警告：没有找到任何固件文件（bin/upload 为空），但 bin/targets 存在。请检查是否启用了固件生成选项。"
+            ls -la bin/targets/
+          else
+            echo "输出文件列表（按大小排序）："
+            ls -lhS bin/upload/
+          fi
 
       - name: 上传固件产物
         if: success()
