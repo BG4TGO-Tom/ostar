@@ -1,4 +1,4 @@
-name: Build ostar - MT7688AN (Custom Feeds)
+name: Build ostar (MT7688AN) - MMDVM + Travelmate
 
 on:
   workflow_dispatch:
@@ -23,13 +23,18 @@ jobs:
             rsync unzip wget xz-utils zlib1g-dev libelf-dev \
             libarchive-dev libcurl4-openssl-dev libexpat1-dev
 
-    - name: 克隆 ostar 仓库
+    - name: 克隆 ostar 仓库（含 .config）
       run: |
         git clone --depth=1 --branch "$REPO_BRANCH" "$REPO_URL" openwrt
         cd openwrt
+        if [ ! -f .config ]; then
+          echo "❌ 错误：仓库中缺少 .config！"
+          exit 1
+        fi
+        echo "✅ 已加载 .config"
 
-    # =============== 关键：打 CMake 补丁（兼容 Ubuntu 22.04） ===============
-    - name: Apply CMake 3.15.1 compatibility patch
+    # =============== 关键修复：CMake 3.15.1 兼容 GCC 11+ ===============
+    - name: Apply CMake compatibility patch
       run: |
         mkdir -p openwrt/tools/cmake/patches
         cat > openwrt/tools/cmake/patches/100-gcc11-compat.patch << 'EOF'
@@ -64,7 +69,7 @@ jobs:
 EOF
 
     # =============== 按你的要求配置 feeds ===============
-    - name: 配置自定义 feeds
+    - name: 配置自定义 feeds 源
       run: |
         cd openwrt
         cat > feeds.conf << 'EOF'
@@ -76,7 +81,7 @@ EOF
         ./scripts/feeds clean
         ./scripts/feeds update -a
 
-    # =============== 按你的列表精确安装包 ===============
+    # =============== 精确安装你指定的包 ===============
     - name: 安装必要软件包
       run: |
         cd openwrt
@@ -92,17 +97,6 @@ EOF
         ./scripts/feeds install luci-i18n-travelmate-zh-cn
         ./scripts/feeds install -a -p mmdvm
 
-    # =============== 加载 .config（必须存在） ===============
-    - name: 检查并加载 .config
-      run: |
-        cd openwrt
-        if [ ! -f .config ]; then
-          echo "❌ 错误：ostar 仓库中缺少 .config 文件！"
-          ls -la
-          exit 1
-        fi
-        echo "✅ 使用 ostar 自带的 .config"
-
     - name: 下载依赖
       run: |
         cd openwrt
@@ -110,15 +104,16 @@ EOF
         make download -j8
         find dl -size -1024c -delete
 
-    - name: 编译固件
+    - name: 编译固件（真实构建）
       id: compile
       run: |
         cd openwrt
         echo "⏳ 开始编译（预计 30～60 分钟）..."
         make -j$(nproc) V=s
 
+        # 检查是否生成 sysupgrade 固件
         if ! ls bin/targets/*/*/*-squashfs-sysupgrade.bin >/dev/null 2>&1; then
-          echo "❌ 未生成固件！"
+          echo "❌ 编译完成但未生成固件！"
           ls -R bin/ || echo "bin 目录为空"
           exit 1
         fi
@@ -127,7 +122,7 @@ EOF
         echo "DEVICE_NAME=_${DEVICE}" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 上传固件
+    - name: 上传固件到 Artifacts
       uses: actions/upload-artifact@v4
       if: success()
       with:
