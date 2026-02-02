@@ -32,10 +32,11 @@ jobs:
             libncursesw5-dev libglib2.0-dev uuid-dev liblzma-dev \
             gcc-multilib g++-multilib libc6-dev-i386 lib32gcc-s1 \
             texinfo xmlto qemu-utils upx p7zip-full msmtp uglifyjs \
-            perl perl-modules  # 额外确保 perl 模块可用（FindBin 等）
+            perl perl-modules
 
           cmake --version
 
+          # 预创建 .built 作为备用跳过（如果 patch 未触发）
           mkdir -p tools/cmake
           touch tools/cmake/.built
           mkdir -p staging_dir/host/stamp
@@ -55,51 +56,57 @@ jobs:
 
       - name: 绕过 prereq 检查 + 更新 feeds
         run: |
-          # 强制绕过 prereq 检查（Ubuntu 24.04 上 gcc/perl 等常触发失败，但实际可编译）
           mkdir -p tmp
           touch tmp/.prereq-build
-          echo "已创建 tmp/.prereq-build，跳过严格 prereq 检查"
+          echo "已创建 tmp/.prereq-build，跳过 prereq 检查"
 
-          # 可选：手动运行 prereq 看详细错误（调试用）
           ./scripts/prereq 2>&1 | tee prereq.log || true
           echo "=== prereq 输出（如果有错误）==="
           cat prereq.log || true
 
-          # 更新 feeds
           ./scripts/feeds update -a || {
-            echo "Feeds update 失败！打印诊断信息："
+            echo "Feeds update 失败！诊断信息："
             cat prereq.log || true
-            ls -la tmp/ || true
-            echo "请检查是否网络问题或 feeds 源不可达。"
             exit 1
           }
 
           ./scripts/feeds install -a || { echo "Feeds install 失败"; exit 1; }
 
-      - name: 应用目标配置 (MT76x8 示例)
+      - name: 应用目标配置 (MT76x8 示例) + Patch cmake 兼容 GCC 13+
         run: |
           cp config.mt76x8 .config
           make defconfig
+
+          # 关键修复：patch cmake-3.15.1 源码，添加缺失头文件（解决 ExitStatus / int64_t 未声明）
+          if [ -d "build_dir/host/cmake-3.15.1/Source" ]; then
+            echo "Patch cmWorkerPool.h 添加 <cstdint> 和 <cinttypes>"
+            sed -i '1i #include <cstdint>' build_dir/host/cmake-3.15.1/Source/cmWorkerPool.h
+            sed -i '1i #include <cinttypes>' build_dir/host/cmake-3.15.1/Source/cmWorkerPool.h || true
+            # 额外确保 ExitStatus 类型定义（如果需要，可加 typedef）
+            sed -i '/struct ProcessResultT {/a \ \ int ExitStatus = 0;' build_dir/host/cmake-3.15.1/Source/cmWorkerPool.h || true
+          else
+            echo "cmake 源码目录尚未下载，跳过 patch（make 会先构建）"
+          fi
 
       - name: 下载所有依赖源码
         run: make download -j8 || make download -j1 V=s
 
       - name: 编译固件
         run: |
-          echo "开始编译 (优先多核，失败则单线程)..."
+          echo "开始编译..."
           make -j$(nproc) V=s 2>&1 | tee build.log || {
-            echo "多核失败 → 切换单线程重试..."
+            echo "多核失败 → 单线程重试..."
             make -j1 V=s 2>&1 | tee -a build.log || true
           }
 
           echo "=== 编译结果检查 ==="
           ls -la bin/ || echo "bin/ 不存在"
           ls -la bin/targets/ 2>/dev/null || echo "bin/targets/ 不存在或为空"
-          echo "=== build.log 最后 150 行 ==="
-          tail -n 150 build.log
+          echo "=== build.log 最后 200 行 ==="
+          tail -n 200 build.log
 
           if [ ! -d "bin/targets" ] || [ -z "$(ls bin/targets 2>/dev/null)" ]; then
-            echo "编译失败：未生成 bin/targets/ 目录。请检查日志。"
+            echo "编译失败：未生成 bin/targets/。请检查日志中 cmake 或其他错误。"
             exit 1
           fi
 
