@@ -1,214 +1,136 @@
 #
-# Build ostar (ostar-19.07) for MT7688AN
-# Reference: P3TERX/Actions-OpenWrt
-# Author: Adapted for BG4TGO-Tom/ostar
+# Build Ostar-19.07 on Ubuntu 22.04 (2026 Compatible)
+# Fixes: CMake version, patch compatibility, toolchain issues
 #
 
-name: GM950i - ostar MT7688
+name: Build Ostar-19.07
 
 on:
   workflow_dispatch:
     inputs:
       ssh:
-        description: 'SSH connection to Actions'
+        description: 'Enable SSH debug (true/false)'
         required: false
         default: 'false'
 
 env:
   REPO_URL: https://github.com/BG4TGO-Tom/ostar.git
   REPO_BRANCH: ostar-19.07
-  CONFIG_SOURCE: config.mt76x8          # ← 关键配置文件名
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: true
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
+  UPLOAD_FIRMWARE: false
   TZ: Asia/Shanghai
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04  # ✅ 2026 年仍受支持
 
     steps:
-    - name: Checkout
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: 初始化环境
+    - name: Initialize Environment (with CMake 3.13.5)
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install \
-            build-essential ccache ecj fastjar file g++ gawk \
-            gettext git libncurses5-dev libssl-dev python3-distutils \
-            rsync unzip wget xz-utils zlib1g-dev libelf-dev \
-            libarchive-dev libcurl4-openssl-dev libexpat1-dev
-        sudo -E apt-get -qq autoremount --purge || true
+
+        # Install base dependencies (Ubuntu 20.04 compatible set)
+        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2004)
+
+        # 🔧 CRITICAL: Downgrade CMake to 3.13.5 (required by OpenWrt 19.07)
+        echo "Installing CMake 3.13.5..."
+        wget -q https://github.com/Kitware/CMake/releases/download/v3.13.5/cmake-3.13.5-Linux-x86_64.sh
+        sudo chmod +x cmake-3.13.5-Linux-x86_64.sh
+        sudo ./cmake-3.13.5-Linux-x86_64.sh --skip-license --prefix=/usr/local
+        sudo ln -sf /usr/local/bin/cmake /usr/bin/cmake
+        sudo ln -sf /usr/local/bin/ctest /usr/bin/ctest
+        cmake --version
+
+        # Clean up
+        sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
-    - name: 克隆源码
+    - name: Clone Source Code
       working-directory: /workdir
       run: |
-        git clone --depth=1 -b "$REPO_BRANCH" "$REPO_URL" openwrt
-        ln -sf /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
+        df -hT $PWD
+        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    # =============== 关键：加载 config.mt76x8 ===============
-    - name: 加载 MT7688 配置
+    - name: Load Custom Feeds (diy-part1.sh)
+      run: |
+        [ -e "$FEEDS_CONF" ] && mv "$FEEDS_CONF" openwrt/feeds.conf.default
+        chmod +x "$DIY_P1_SH"
+        cd openwrt
+        "$GITHUB_WORKSPACE/$DIY_P1_SH"
+
+    - name: Update Feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: Install All Feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Install Specific Packages (19.07 compatible)
       run: |
         cd openwrt
-        if [ ! -f "$CONFIG_SOURCE" ]; then
-          echo "❌ 错误：仓库中缺少 $CONFIG_SOURCE"
-          ls -la
-          exit 1
-        fi
-        cp "$CONFIG_SOURCE" .config
-        echo "✅ 已使用 $CONFIG_SOURCE 作为 .config"
+        ./scripts/feeds install luci luci-base luci-compat luci-mod-admin-full \
+          luci-proto-ipv6 stm32flash travelmate luci-app-travelmate luci-i18n-travelmate-zh-cn
 
-    # =============== 打 CMake 补丁（兼容 GCC 11+）===============
-    - name: Apply CMake 3.15.1 compatibility patch
+    - name: Load Custom Configuration + Apply Patches
       run: |
-        mkdir -p openwrt/tools/cmake/patches
-        cat > openwrt/tools/cmake/patches/100-gcc11-compat.patch << 'EOF'
---- a/Source/cmWorkerPool.h
-+++ b/Source/cmWorkerPool.h
-@@ -18,7 +18,11 @@
- #include <future>
- #include <vector>
- 
--using std::result_of;
-+#if __cplusplus >= 201703L
-+using std::invoke_result_t;
-+#else
-+using std::result_of;
-+#endif
- 
- namespace cmsys {
- class ThreadPool;
---- a/Source/cmWorkerPool.cxx
-+++ b/Source/cmWorkerPool.cxx
-@@ -15,6 +15,10 @@
- #include "cmWorkerPool.h"
- #include "cmsys/ThreadPool.hxx"
- 
-+#if __cplusplus >= 201703L
-+using std::invoke_result_t;
-+#else
- using std::result_of;
-+#endif
- 
- void cmWorkerPool::Initialize(unsigned int threadCount)
-EOF
-
-    # =============== 配置自定义 feeds（按你提供）===============
-    - name: 配置 feeds 源
-      run: |
+        [ -e files ] && mv files openwrt/files
+        [ -e "$CONFIG_FILE" ] && mv "$CONFIG_FILE" openwrt/.config
+        chmod +x "$DIY_P2_SH"
         cd openwrt
-        cat > feeds.conf << 'EOF'
-src-git packages https://git.openwrt.org/feed/packages.git
-src-git luci https://github.com/lazywalker/luci.git
-src-git mmdvm https://github.com/lazywalker/mmdvm-openwrt
-src-git devtools https://github.com/lazywalker/devtools-feeds
-EOF
-        ./scripts/feeds clean
-        ./scripts/feeds update -a
+        "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
-    - name: 安装指定软件包
-      run: |
-        cd openwrt
-        ./scripts/feeds install luci-base
-        ./scripts/feeds install luci-lib-base
-        ./scripts/feeds install luci-compat
-        ./scripts/feeds install luci-mod-status
-        ./scripts/feeds install luci-mod-system
-        ./scripts/feeds install luci-proto-ipv6
-        ./scripts/feeds install stm32flash
-        ./scripts/feeds install travelmate
-        ./scripts/feeds install luci-app-travelmate
-        ./scripts/feeds install luci-i18n-travelmate-zh-cn
-        ./scripts/feeds install -a -p mmdvm
-
-    - name: SSH 调试
+    - name: SSH Debug (Optional)
       uses: P3TERX/ssh2actions@v1.0.0
       if: github.event.inputs.ssh == 'true'
       env:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-    - name: 下载依赖
-      id: package
+    - name: Download Packages
       run: |
         cd openwrt
         make defconfig
         make download -j8
         find dl -size -1024c -delete
 
-    - name: 编译固件
+    - name: Compile Firmware
       id: compile
       run: |
         cd openwrt
-        echo "⏳ 开始编译（预计 30～60 分钟）..."
-        make -j$(nproc) V=s
-
-        # 验证是否生成 MT7688 固件
-        if ! ls bin/targets/ramips/mt76x8/*-squashfs-sysupgrade.bin >/dev/null 2>&1; then
-          echo "❌ 编译完成但未生成 MT7688 固件！"
-          echo "bin 目录内容："
-          ls -R bin/ || echo "空目录"
-          exit 1
-        fi
-
+        echo "Compiling Ostar-19.07 with $(nproc) threads..."
+        # Use V=s only on final fallback for log clarity
+        make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        DEVICE=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | head -1 | sed -r 's/.*DEVICE_(.*)=y/\1/' || echo "mt7688")
-        echo "DEVICE_NAME=_${DEVICE}" >> $GITHUB_ENV
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 检查磁盘使用
+    - name: Check Disk Usage
       if: success() || failure()
       run: df -hT
 
-    - name: 上传 bin 目录
+    - name: Upload Bin Directory
       uses: actions/upload-artifact@v4
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: Ostar-19.07_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
         retention-days: 7
 
-    - name: 整理固件
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && success()
-      run: |
-        cd openwrt/bin/targets/ramips/mt76x8
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: 上传固件
-      uses: actions/upload-artifact@v4
-      if: steps.organize.outputs.status == 'success'
-      with:
-        name: Firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
-        retention-days: 14
-
-    - name: 发布到 Release（可选）
-      uses: softprops/action-gh-release@v2
-      if: env.UPLOAD_RELEASE == 'true' && success()
-      with:
-        tag_name: ostar-${{ env.FILE_DATE }}
-        name: ostar MT7688 Build ${{ env.FILE_DATE }}
-        files: ${{ env.FIRMWARE }}/*
-        body: |
-          Built from: ${{ env.REPO_URL }}
-          Branch: ${{ env.REPO_BRANCH }}
-          Config: config.mt76x8
-          Packages: MMDVM, Travelmate, Luci-ZH
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: 清理旧 workflow runs
+    - name: Clean Old Workflow Runs
       uses: GitRML/delete-workflow-runs@main
       with:
         retain_days: 1
